@@ -32,7 +32,7 @@ foreach (DTE dte in GetRunningVisualStudios())
 Application.Init();
 Toplevel top = Application.Top;
 
-Terminal.Gui.Window win = new Terminal.Gui.Window("Välj lösningsmapp att öppna i PowerShell")
+Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder to open in PowerShell")
 {
     X = 0,
     Y = 1, // lämna plats för menyrad
@@ -43,7 +43,7 @@ top.Add(win);
 
 if (solutionDirs.Count == 0)
 {
-    win.Add(new Label(1, 1, "Inga öppna Visual Studio-lösningar hittades."));
+    win.Add(new Label(1, 1, "No open Visual Studio solutions found."));
 }
 else
 {
