@@ -32,7 +32,7 @@ foreach (DTE dte in GetRunningVisualStudios())
 Application.Init();
 Toplevel top = Application.Top;
 
-Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder to open in PowerShell")
+Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder  —  Enter: PowerShell   E: Explorer   Esc: Cancel")
 {
     X = 0,
     Y = 1, // lämna plats för menyrad
@@ -55,17 +55,8 @@ else
         Height = Dim.Fill() - 2,
     };
 
-    int lastIndex = -1;
-
-    listView.SelectedItemChanged += (args) =>
+    void OpenInPowerShell(string dir)
     {
-        if (args.Item == lastIndex || args.Item < 0 || args.Item >= solutionDirs.Count)
-        {
-            return;
-        }
-
-        lastIndex = args.Item;
-        string dir = solutionDirs[args.Item];
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -73,7 +64,35 @@ else
             UseShellExecute = true,
             WorkingDirectory = dir
         });
+    }
+
+    void OpenInExplorer(string dir)
+    {
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"\"{dir}\"",
+            UseShellExecute = true
+        });
+    }
+
+    listView.OpenSelectedItem += (args) =>
+    {
+        if (args.Item < 0 || args.Item >= solutionDirs.Count) return;
+        OpenInPowerShell(solutionDirs[args.Item]);
         Application.RequestStop();
+    };
+
+    listView.KeyPress += (args) =>
+    {
+        if (args.KeyEvent.KeyValue == 'e' || args.KeyEvent.KeyValue == 'E')
+        {
+            int idx = listView.SelectedItem;
+            if (idx < 0 || idx >= solutionDirs.Count) return;
+            OpenInExplorer(solutionDirs[idx]);
+            Application.RequestStop();
+            args.Handled = true;
+        }
     };
 
     win.Add(listView);
