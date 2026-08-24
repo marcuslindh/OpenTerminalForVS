@@ -1,4 +1,4 @@
-﻿
+
 using EnvDTE;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
@@ -32,7 +32,7 @@ foreach (DTE dte in GetRunningVisualStudios())
 Application.Init();
 Toplevel top = Application.Top;
 
-Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder  —  Enter: PowerShell   E: Explorer   Esc: Cancel")
+Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder  —  Enter: PowerShell   E: Explorer   C: Claude   Esc: Cancel")
 {
     X = 0,
     Y = 1, // lämna plats för menyrad
@@ -76,6 +76,19 @@ else
         });
     }
 
+    void OpenInClaude(string dir)
+    {
+        // sessionsnamnet blir mappens namn, t.ex. "OpenTerminalForVS.github"
+        string sessionName = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoExit -Command claude --remote-control \"{sessionName}\"",
+            UseShellExecute = true,
+            WorkingDirectory = dir
+        });
+    }
+
     listView.OpenSelectedItem += (args) =>
     {
         if (args.Item < 0 || args.Item >= solutionDirs.Count) return;
@@ -90,6 +103,14 @@ else
             int idx = listView.SelectedItem;
             if (idx < 0 || idx >= solutionDirs.Count) return;
             OpenInExplorer(solutionDirs[idx]);
+            Application.RequestStop();
+            args.Handled = true;
+        }
+        else if (args.KeyEvent.KeyValue == 'c' || args.KeyEvent.KeyValue == 'C')
+        {
+            int idx = listView.SelectedItem;
+            if (idx < 0 || idx >= solutionDirs.Count) return;
+            OpenInClaude(solutionDirs[idx]);
             Application.RequestStop();
             args.Handled = true;
         }
