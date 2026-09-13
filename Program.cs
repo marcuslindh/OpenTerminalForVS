@@ -3,11 +3,12 @@ using System.Runtime.InteropServices;
 using Terminal.Gui;
 
 List<string> solutionDirs = VisualStudioInterop.GetOpenSolutionDirectories();
+List<ClaudeSession> claudeSessions = ClaudeSessionInterop.GetRunningSessions();
 
 Application.Init();
 Toplevel top = Application.Top;
 
-Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder  —  Enter: PowerShell   E: Explorer   C: Claude   Esc: Cancel")
+Terminal.Gui.Window win = new Terminal.Gui.Window("Enter: PowerShell   E: Explorer   C: Claude   Tab: switch list   Esc: Cancel")
 {
     X = 0,
     Y = 1, // lämna plats för menyrad
@@ -16,83 +17,150 @@ Terminal.Gui.Window win = new Terminal.Gui.Window("Select solution folder  —  
 };
 top.Add(win);
 
-if (solutionDirs.Count == 0)
+void OpenInPowerShell(string dir)
 {
-    win.Add(new Label(1, 1, "No open Visual Studio solutions found."));
+    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+    {
+        FileName = "powershell.exe",
+        Arguments = $"-NoExit -Command cd \"{dir}\"",
+        UseShellExecute = true,
+        WorkingDirectory = dir
+    });
 }
-else
+
+void OpenInExplorer(string dir)
 {
-    ListView listView = new ListView(solutionDirs)
+    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
     {
-        X = 1,
-        Y = 1,
-        Width = Dim.Fill() - 2,
-        Height = Dim.Fill() - 2,
-    };
+        FileName = "explorer.exe",
+        Arguments = $"\"{dir}\"",
+        UseShellExecute = true
+    });
+}
 
-    void OpenInPowerShell(string dir)
+void OpenInClaude(string dir)
+{
+    // sessionsnamnet blir mappens namn, t.ex. "OpenTerminalForVS.github"
+    string sessionName = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
     {
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoExit -Command cd \"{dir}\"",
-            UseShellExecute = true,
-            WorkingDirectory = dir
-        });
-    }
+        FileName = "powershell.exe",
+        Arguments = $"-NoExit -Command claude --remote-control \"{sessionName}\"",
+        UseShellExecute = true,
+        WorkingDirectory = dir
+    });
+}
 
-    void OpenInExplorer(string dir)
-    {
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "explorer.exe",
-            Arguments = $"\"{dir}\"",
-            UseShellExecute = true
-        });
-    }
-
-    void OpenInClaude(string dir)
-    {
-        // sessionsnamnet blir mappens namn, t.ex. "OpenTerminalForVS.github"
-        string sessionName = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoExit -Command claude --remote-control \"{sessionName}\"",
-            UseShellExecute = true,
-            WorkingDirectory = dir
-        });
-    }
-
+// Varje lista har samma tre åtgärder; dirAt översätter radindex till mapp.
+void WireActions(ListView listView, Func<int, string?> dirAt)
+{
     listView.OpenSelectedItem += (args) =>
     {
-        if (args.Item < 0 || args.Item >= solutionDirs.Count) return;
-        OpenInPowerShell(solutionDirs[args.Item]);
+        string? dir = dirAt(args.Item);
+        if (dir == null) return;
+        OpenInPowerShell(dir);
         Application.RequestStop();
     };
 
     listView.KeyPress += (args) =>
     {
-        if (args.KeyEvent.KeyValue == 'e' || args.KeyEvent.KeyValue == 'E')
+        int key = args.KeyEvent.KeyValue;
+        if (key == 'e' || key == 'E')
         {
-            int idx = listView.SelectedItem;
-            if (idx < 0 || idx >= solutionDirs.Count) return;
-            OpenInExplorer(solutionDirs[idx]);
+            string? dir = dirAt(listView.SelectedItem);
+            if (dir == null) return;
+            OpenInExplorer(dir);
             Application.RequestStop();
             args.Handled = true;
         }
-        else if (args.KeyEvent.KeyValue == 'c' || args.KeyEvent.KeyValue == 'C')
+        else if (key == 'c' || key == 'C')
         {
-            int idx = listView.SelectedItem;
-            if (idx < 0 || idx >= solutionDirs.Count) return;
-            OpenInClaude(solutionDirs[idx]);
+            string? dir = dirAt(listView.SelectedItem);
+            if (dir == null) return;
+            OpenInClaude(dir);
             Application.RequestStop();
             args.Handled = true;
         }
     };
-
-    win.Add(listView);
 }
+
+// en tom lista ska inte lägga beslag på halva fönstret
+Dim vsHeight = claudeSessions.Count == 0 ? Dim.Fill()
+    : solutionDirs.Count == 0 ? Dim.Sized(3)
+    : Dim.Percent(50);
+
+FrameView vsFrame = new FrameView($"Visual Studio solutions ({solutionDirs.Count})")
+{
+    X = 0,
+    Y = 0,
+    Width = Dim.Fill(),
+    Height = vsHeight
+};
+
+FrameView claudeFrame = new FrameView($"Claude sessions ({claudeSessions.Count})")
+{
+    X = 0,
+    Y = Pos.Bottom(vsFrame),
+    Width = Dim.Fill(),
+    Height = Dim.Fill()
+};
+
+win.Add(vsFrame, claudeFrame);
+
+ListView? vsList = null;
+ListView? claudeList = null;
+
+if (solutionDirs.Count == 0)
+{
+    vsFrame.Add(new Label(0, 0, "No open Visual Studio solutions found."));
+}
+else
+{
+    // "*" markerar lösningar som redan har en Claude-session igång
+    List<string> vsRows = new List<string>(solutionDirs.Count);
+    foreach (string dir in solutionDirs)
+    {
+        bool hasSession = claudeSessions.Exists(s => string.Equals(s.Cwd.TrimEnd(Path.DirectorySeparatorChar), dir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase));
+        vsRows.Add((hasSession ? "* " : "  ") + dir);
+    }
+
+    vsList = new ListView(vsRows)
+    {
+        X = 0,
+        Y = 0,
+        Width = Dim.Fill(),
+        Height = Dim.Fill(),
+    };
+    WireActions(vsList, i => i >= 0 && i < solutionDirs.Count ? solutionDirs[i] : null);
+    vsFrame.Add(vsList);
+}
+
+if (claudeSessions.Count == 0)
+{
+    claudeFrame.Add(new Label(0, 0, "No running Claude sessions found."));
+}
+else
+{
+    List<string> claudeRows = new List<string>(claudeSessions.Count);
+    foreach (ClaudeSession session in claudeSessions)
+    {
+        string status = string.IsNullOrEmpty(session.Status) ? "?" : session.Status;
+        string name = string.IsNullOrEmpty(session.Name) ? $"pid {session.Pid}" : session.Name;
+        claudeRows.Add($"[{status,-5}] {name}  —  {session.Cwd}");
+    }
+
+    claudeList = new ListView(claudeRows)
+    {
+        X = 0,
+        Y = 0,
+        Width = Dim.Fill(),
+        Height = Dim.Fill(),
+    };
+    WireActions(claudeList, i => i >= 0 && i < claudeSessions.Count ? claudeSessions[i].Cwd : null);
+    claudeFrame.Add(claudeList);
+}
+
+(vsList ?? claudeList)?.SetFocus();
 
 Application.Run();
 
@@ -392,4 +460,229 @@ internal static unsafe class VisualStudioInterop
 
     [DllImport("oleaut32.dll")]
     private static extern int VariantClear(Variant* variant);
+}
+
+/// <summary>En Claude Code-session som körs på den här datorn.</summary>
+internal sealed class ClaudeSession
+{
+    public int Pid;
+    public string Cwd = string.Empty;
+    public string Name = string.Empty;
+    public string Status = string.Empty;
+}
+
+/// <summary>
+/// Hittar igångvarande Claude Code-sessioner. Claude skriver en fil per process i
+/// %USERPROFILE%\.claude\sessions\&lt;pid&gt;.json med bland annat cwd, namn och status.
+/// Filerna städas inte alltid bort, så varje pid kontrolleras mot processlistan.
+/// JSON:en läses med en liten egen skanner istället för System.Text.Json — det håller
+/// AOT-binären liten och filerna är platta objekt med enkla värden.
+/// </summary>
+internal static class ClaudeSessionInterop
+{
+    public static List<ClaudeSession> GetRunningSessions()
+    {
+        List<ClaudeSession> sessions = new List<ClaudeSession>();
+
+        string dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".claude",
+            "sessions");
+
+        if (!Directory.Exists(dir))
+        {
+            return sessions;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(dir, "*.json"))
+        {
+            try
+            {
+                string json = File.ReadAllText(file);
+
+                string? pidText = ReadTopLevelValue(json, "pid");
+                if (!int.TryParse(pidText, out int pid))
+                {
+                    continue;
+                }
+
+                string? cwd = ReadTopLevelValue(json, "cwd");
+                if (string.IsNullOrEmpty(cwd))
+                {
+                    continue;
+                }
+
+                if (!IsSessionAlive(pid, ReadTopLevelValue(json, "procStart")))
+                {
+                    continue;
+                }
+
+                sessions.Add(new ClaudeSession
+                {
+                    Pid = pid,
+                    Cwd = cwd,
+                    Name = ReadTopLevelValue(json, "name") ?? string.Empty,
+                    Status = ReadTopLevelValue(json, "status") ?? string.Empty
+                });
+            }
+            catch
+            {
+                // filen kan skrivas om eller tas bort mitt i läsningen
+            }
+        }
+
+        sessions.Sort((a, b) => string.Compare(a.Cwd, b.Cwd, StringComparison.OrdinalIgnoreCase));
+        return sessions;
+    }
+
+    /// <summary>
+    /// Pid:et kan ha återanvänts av en helt annan process, så starttiden jämförs med
+    /// procStart (processens skapelsetid som FILETIME) när den finns.
+    /// </summary>
+    private static bool IsSessionAlive(int pid, string? procStart)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(pid);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            if (long.TryParse(procStart, out long started) && started > 0)
+            {
+                try
+                {
+                    return process.StartTime.ToFileTime() == started;
+                }
+                catch
+                {
+                    // StartTime kan nekas — fall tillbaka på processnamnet
+                }
+            }
+
+            string name = process.ProcessName;
+            return name.Contains("claude", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("node", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Läser värdet för en nyckel på objektets toppnivå. Nästlade nycklar ignoreras.</summary>
+    private static string? ReadTopLevelValue(string json, string key)
+    {
+        int depth = 0;
+        int i = 0;
+
+        while (i < json.Length)
+        {
+            char c = json[i];
+
+            if (c == '"')
+            {
+                int afterString = SkipString(json, i);
+                int j = afterString;
+                while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+
+                if (depth == 1 && j < json.Length && json[j] == ':')
+                {
+                    string name = Unescape(json, i + 1, afterString - 1);
+                    j++;
+                    while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+
+                    if (name == key && j < json.Length)
+                    {
+                        if (json[j] == '"')
+                        {
+                            int afterValue = SkipString(json, j);
+                            return Unescape(json, j + 1, afterValue - 1);
+                        }
+
+                        int k = j;
+                        while (k < json.Length && json[k] != ',' && json[k] != '}' && json[k] != ']' && !char.IsWhiteSpace(json[k])) k++;
+                        return json.Substring(j, k - j);
+                    }
+
+                    i = j; // fortsätt vid värdet så att { och [ räknas in i djupet
+                    continue;
+                }
+
+                i = afterString;
+                continue;
+            }
+
+            if (c == '{' || c == '[') depth++;
+            else if (c == '}' || c == ']') depth--;
+            i++;
+        }
+
+        return null;
+    }
+
+    /// <summary>Returnerar index direkt efter strängens avslutande citattecken.</summary>
+    private static int SkipString(string json, int quoteIndex)
+    {
+        int i = quoteIndex + 1;
+        while (i < json.Length)
+        {
+            char c = json[i];
+            if (c == '\\')
+            {
+                i += 2;
+                continue;
+            }
+            if (c == '"')
+            {
+                return i + 1;
+            }
+            i++;
+        }
+        return json.Length;
+    }
+
+    private static string Unescape(string json, int start, int endExclusive)
+    {
+        if (endExclusive <= start)
+        {
+            return string.Empty;
+        }
+
+        System.Text.StringBuilder text = new System.Text.StringBuilder(endExclusive - start);
+        int i = start;
+
+        while (i < endExclusive)
+        {
+            char c = json[i];
+            if (c != '\\' || i + 1 >= endExclusive)
+            {
+                text.Append(c);
+                i++;
+                continue;
+            }
+
+            char escape = json[i + 1];
+            i += 2;
+            switch (escape)
+            {
+                case 'n': text.Append('\n'); break;
+                case 'r': text.Append('\r'); break;
+                case 't': text.Append('\t'); break;
+                case 'b': text.Append('\b'); break;
+                case 'f': text.Append('\f'); break;
+                case 'u':
+                    if (i + 4 <= endExclusive && ushort.TryParse(json.AsSpan(i, 4), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out ushort code))
+                    {
+                        text.Append((char)code);
+                        i += 4;
+                    }
+                    break;
+                default: text.Append(escape); break;
+            }
+        }
+
+        return text.ToString();
+    }
 }

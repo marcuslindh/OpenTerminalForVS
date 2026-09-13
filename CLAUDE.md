@@ -9,7 +9,7 @@ dotnet build
 dotnet run
 ```
 
-Publish a self-contained NativeAOT executable (single ~3.4 MB `.exe`, no .NET runtime needed):
+Publish a self-contained NativeAOT executable (single ~3.5 MB `.exe`, no .NET runtime needed):
 
 ```powershell
 .\publish.ps1            # -Runtime win-arm64 / -OutputDir dist / -Run
@@ -29,7 +29,8 @@ The Visual Studio publish profile (`Properties/PublishProfiles/FolderProfile.pub
 
 Native AOT also requires the MSVC linker (Visual Studio's *Desktop development with C++* workload).
 
-Requires .NET 10 SDK on Windows. Visual Studio must be running with at least one open solution for there to be anything to display.
+Requires .NET 10 SDK on Windows. For anything to show up there must be at least one open Visual Studio
+solution or one running Claude Code session.
 
 There are no tests in this repository.
 
@@ -37,13 +38,25 @@ There are no tests in this repository.
 
 This is a **single-file console application** — all logic lives in `Program.cs` using C# top-level statements. There are no architectural layers; understanding the project means reading `Program.cs` end to end.
 
-The program does three things in sequence:
+The program does four things in sequence:
 
-1. **Enumerate running Visual Studio instances via COM interop.** `VisualStudioInterop.GetOpenSolutionDirectories()` walks the Running Object Table (`IRunningObjectTable` via `ole32.dll`), filters monikers whose display name starts with `!VisualStudio`, and reads `Solution.IsOpen` / `Solution.FullName` off each DTE object. The `catch` block in the enumeration loop is intentional — VS instances can close mid-iteration and we silently skip them.
+1. **Find running Claude Code sessions.** `ClaudeSessionInterop.GetRunningSessions()` reads
+   `%USERPROFILE%\.claude\sessions\<pid>.json` — Claude writes one such file per session with `pid`,
+   `cwd`, `name`, `status` and `procStart`. Stale files are common, so each pid is checked against the
+   process list and, when `procStart` (the process creation time as a FILETIME) is present, against
+   `Process.StartTime.ToFileTime()` so a recycled pid can't resurrect a dead session. The JSON is read
+   with a small hand-written top-level scanner (`ReadTopLevelValue`) rather than `System.Text.Json`, to
+   keep the AOT binary small; it deliberately ignores nested keys (e.g. `formerNames[].name`).
 
-2. **Render a Terminal.Gui `ListView`** of solution directories inside a single `Window`. If no solutions are open, a message label is shown instead.
+2. **Enumerate running Visual Studio instances via COM interop.** `VisualStudioInterop.GetOpenSolutionDirectories()` walks the Running Object Table (`IRunningObjectTable` via `ole32.dll`), filters monikers whose display name starts with `!VisualStudio`, and reads `Solution.IsOpen` / `Solution.FullName` off each DTE object. The `catch` block in the enumeration loop is intentional — VS instances can close mid-iteration and we silently skip them.
 
-3. **Launch on explicit user action.** Three triggers, each followed by `Application.RequestStop()`:
+3. **Render two Terminal.Gui `ListView`s** inside one `Window`, each in its own `FrameView`: Visual Studio
+   solutions on top, Claude sessions below (`Tab` switches). Either frame shows a message label instead when
+   its list is empty. A `*` marks solutions that already have a Claude session running in the same folder.
+
+4. **Launch on explicit user action.** Both lists are wired by the same `WireActions(listView, dirAt)`
+   helper, where `dirAt` maps a row index to a folder (the solution directory, or the session's `cwd`).
+   Three triggers, each followed by `Application.RequestStop()`:
    - `OpenSelectedItem` (Enter or double-click) → `powershell.exe -NoExit -Command cd "<dir>"` with `WorkingDirectory` set.
    - `KeyPress` matching `'e'`/`'E'` via `KeyEvent.KeyValue` → `explorer.exe "<dir>"`.
    - `KeyPress` matching `'c'`/`'C'` → PowerShell running `claude --remote-control "<folder name>"` in `<dir>`, so the Remote Control session is named after the solution folder.
