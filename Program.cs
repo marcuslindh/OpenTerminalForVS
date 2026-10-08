@@ -141,18 +141,32 @@ if (claudeSessions.Count == 0)
 }
 else
 {
-    List<string> claudeRows = new List<string>(claudeSessions.Count);
+    // kolumner: mapp först, sedan namn och status, utfyllda till bredaste värdet
+    const string folderHeader = "Folder", nameHeader = "Name", statusHeader = "Status";
+    int folderWidth = folderHeader.Length;
+    int nameWidth = nameHeader.Length;
+    List<(string Folder, string Name, string Status)> cells = new List<(string, string, string)>(claudeSessions.Count);
     foreach (ClaudeSession session in claudeSessions)
     {
         string status = string.IsNullOrEmpty(session.Status) ? "?" : session.Status;
         string name = string.IsNullOrEmpty(session.Name) ? $"pid {session.Pid}" : session.Name;
-        claudeRows.Add($"[{status,-5}] {name}  —  {session.Cwd}");
+        cells.Add((session.Cwd, name, status));
+        folderWidth = Math.Max(folderWidth, session.Cwd.Length);
+        nameWidth = Math.Max(nameWidth, name.Length);
     }
+
+    List<string> claudeRows = new List<string>(cells.Count);
+    foreach ((string folder, string name, string status) in cells)
+    {
+        claudeRows.Add($"{folder.PadRight(folderWidth)}  {name.PadRight(nameWidth)}  {status}");
+    }
+
+    claudeFrame.Add(new Label(0, 0, $"{folderHeader.PadRight(folderWidth)}  {nameHeader.PadRight(nameWidth)}  {statusHeader}"));
 
     claudeList = new ListView(claudeRows)
     {
         X = 0,
-        Y = 0,
+        Y = 1,
         Width = Dim.Fill(),
         Height = Dim.Fill(),
     };
